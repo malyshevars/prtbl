@@ -16,15 +16,15 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
 
-// Период и история
-const unsigned long INTERVAL = 5000; // 5 секунд
-const int MAX_HISTORY = 2880;        // 4 часа
+// История
+const unsigned long INTERVAL = 1000; 
+const int MAX_HISTORY = 2880;        // 5 ч по 5 сек = 2880
 int currentIndex = 0;
 bool bufferFilled = false;
 unsigned long lastUpdate = 0;
 
 struct SensorReading {
-  uint32_t timestamp;
+  uint32_t timestamp;     // в секундах
   float temperature;
   float humidity;
   float pressure;
@@ -32,12 +32,12 @@ struct SensorReading {
 
 SensorReading history[MAX_HISTORY];
 
-// Функция тренда
+// Тренд (delta > 0.3 — изменение)
 String getTrend(float now, float past) {
   float delta = now - past;
-  if (delta > 0.3) return "H"; // рост
-  if (delta < -0.3) return "L"; // падение
-  return "S"; // стабильно
+  if (delta > 0.3) return "H";
+  if (delta < -0.3) return "L";
+  return "S";
 }
 
 void setupWiFi() {
@@ -58,7 +58,8 @@ void setupWiFi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi OK, IP:");
+    Serial.println("\nWiFi OK");
+    Serial.print("IP: ");
     Serial.println(WiFi.localIP());
 
     display.println("WiFi OK");
@@ -72,7 +73,6 @@ void setupWiFi() {
   }
 }
 
-// OTA
 void setupOTA() {
   ArduinoOTA.onStart([]() {
     Serial.println("OTA Start");
@@ -136,32 +136,46 @@ void loop() {
     float temp = bme.readTemperature();
     float hum = bme.readHumidity();
     float pres = bme.readPressure() / 100.0;
+    unsigned long nowSec = millis() / 1000;
 
-    // Сохраняем в историю
-    history[currentIndex] = {millis(), temp, hum, pres};
+    // Сохраняем в буфер
+    history[currentIndex] = { nowSec, temp, hum, pres };
     currentIndex = (currentIndex + 1) % MAX_HISTORY;
     if (currentIndex == 0) bufferFilled = true;
 
-    // Сравнение с 3 минутами назад (36 шагов)
-    int compareIndex = currentIndex - 36;
-    if (compareIndex < 0) compareIndex += MAX_HISTORY;
-
+    // Поиск записи 
     SensorReading now = history[(currentIndex - 1 + MAX_HISTORY) % MAX_HISTORY];
-    SensorReading past = bufferFilled || currentIndex >= 36 ? history[compareIndex] : now;
+    SensorReading past = now;
+    bool foundPast = false;
+    for (int i = 1; i < MAX_HISTORY; i++) {
+      int idx = (currentIndex - i + MAX_HISTORY) % MAX_HISTORY;  // ⬅️ Идём назад
+      if (history[idx].timestamp == 0) break; // пусто — конец валидных данных
+      if ((nowSec - history[idx].timestamp) > 5UL * 3600) break; // старше 5 часов — не берём
+      past = history[idx];
+      foundPast = true;
+      break;
+    }
+  
 
-    String tT = getTrend(now.temperature, past.temperature);
-    String hT = getTrend(now.humidity, past.humidity);
-    String pT = getTrend(now.pressure, past.pressure);
+    String tT = foundPast ? getTrend(now.temperature, past.temperature) : "?";
+    String hT = foundPast ? getTrend(now.humidity, past.humidity) : "?";
+    String pT = foundPast ? getTrend(now.pressure, past.pressure) : "?";
 
     // OLED вывод
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
-    
-    display.printf(" Data: \n");
+
+    unsigned long uptimeSec = millis() / 1000;
+    int hh = uptimeSec / 3600;
+    int mm = (uptimeSec % 3600) / 60;
+    int ss = uptimeSec % 60;
+    display.printf("DATA %02d:%02d:%02d\n", hh, mm, ss);
+
     display.printf("T: %.1f C %s\n", now.temperature, tT.c_str());
     display.printf("H: %.1f %% %s\n", now.humidity, hT.c_str());
     display.printf("P: %.1f hPa %s\n", now.pressure, pT.c_str());
     display.display();
+
   }
 }
