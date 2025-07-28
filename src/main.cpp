@@ -1,4 +1,4 @@
-//27.07 ота+bmp280+wifi+история
+// 27.07 тренд истории + сравнение со средним значением
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -6,6 +6,9 @@
 #include <Adafruit_BME280.h>
 #include <ESP8266WiFi.h>
 #include <ArduinoOTA.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+
 #include "config.h"
 
 #define SCREEN_WIDTH 128
@@ -16,15 +19,23 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
 
-// История
-const unsigned long INTERVAL = 1000; 
-const int MAX_HISTORY = 2880;        // 5 ч по 5 сек = 2880
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 3 * 3600, 180000);
+
+bool showSimpleScreen = false;
+unsigned long lastToggleTime = 0;
+const unsigned long TOGGLE_INTERVAL = 10000; 
+
+const unsigned long INTERVAL = 5000; 
+const int MAX_HISTORY = 121; 
+const unsigned long TREND_PERIOD_SEC = 300;
+
 int currentIndex = 0;
 bool bufferFilled = false;
 unsigned long lastUpdate = 0;
 
 struct SensorReading {
-  uint32_t timestamp;     // в секундах
+  uint32_t timestamp;
   float temperature;
   float humidity;
   float pressure;
@@ -32,9 +43,14 @@ struct SensorReading {
 
 SensorReading history[MAX_HISTORY];
 
-// Тренд (delta > 0.3 — изменение)
-String getTrend(float now, float past) {
-  float delta = now - past;
+float totalTemp = 0;
+float totalHum = 0;
+float totalPres = 0;
+unsigned long totalCount = 0;
+
+
+String getTrend(float now, float reference) {
+  float delta = now - reference;
   if (delta > 0.3) return "H";
   if (delta < -0.3) return "L";
   return "S";
@@ -48,7 +64,7 @@ void setupWiFi() {
   display.clearDisplay();
   display.setCursor(0, 0);
   display.setTextSize(1);
-  display.println("WiFi connecting...");
+  display.println(" Connecting...");
   display.display();
 
   unsigned long start = millis();
@@ -66,6 +82,8 @@ void setupWiFi() {
     display.print("IP:");
     display.println(WiFi.localIP());
     display.display();
+    timeClient.begin();
+    timeClient.update();
   } else {
     Serial.println("\nWiFi FAIL");
     display.println("WiFi FAIL");
@@ -99,20 +117,19 @@ void setup() {
   Serial.begin(115200);
   Wire.begin(OLED_SDA, OLED_SCL);
 
-  // OLED
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED error"));
     while (true);
   }
+
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("PRTBL AE");
+  display.println("AE PRTBL");
   display.display();
   delay(1500);
 
-  // BME280
   if (!bme.begin(0x76)) {
     Serial.println(F("BME280 error"));
     display.clearDisplay();
@@ -130,6 +147,13 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
 
+ // Serial.printf("Free heap: %lu\n", ESP.getFreeHeap());
+
+  if (millis() - lastToggleTime >= TOGGLE_INTERVAL) {
+    showSimpleScreen = !showSimpleScreen;
+    lastToggleTime = millis();
+  }
+
   if (millis() - lastUpdate >= INTERVAL) {
     lastUpdate = millis();
 
@@ -138,44 +162,74 @@ void loop() {
     float pres = bme.readPressure() / 100.0;
     unsigned long nowSec = millis() / 1000;
 
-    // Сохраняем в буфер
+    // сохранить в буфер
     history[currentIndex] = { nowSec, temp, hum, pres };
     currentIndex = (currentIndex + 1) % MAX_HISTORY;
-    if (currentIndex == 0) bufferFilled = true;
 
-    // Поиск записи 
-    SensorReading now = history[(currentIndex - 1 + MAX_HISTORY) % MAX_HISTORY];
-    SensorReading past = now;
-    bool foundPast = false;
-    for (int i = 1; i < MAX_HISTORY; i++) {
-      int idx = (currentIndex - i + MAX_HISTORY) % MAX_HISTORY;  // ⬅️ Идём назад
-      if (history[idx].timestamp == 0) break; // пусто — конец валидных данных
-      if ((nowSec - history[idx].timestamp) > 5UL * 3600) break; // старше 5 часов — не берём
-      past = history[idx];
-      foundPast = true;
-      break;
+    // найти точку 5 минут назад
+    SensorReading past = { 0, 0, 0, 0 };
+    bool found = false;
+
+    for (int i = MAX_HISTORY - 1; i > 0; i--) {
+      int idx = (currentIndex - i + MAX_HISTORY) % MAX_HISTORY;
+      if (history[idx].timestamp == 0) continue;
+
+      if ((nowSec - history[idx].timestamp) >= TREND_PERIOD_SEC) {
+        past = history[idx];
+        found = true;
+        break;
+      }
     }
-  
 
-    String tT = foundPast ? getTrend(now.temperature, past.temperature) : "?";
-    String hT = foundPast ? getTrend(now.humidity, past.humidity) : "?";
-    String pT = foundPast ? getTrend(now.pressure, past.pressure) : "?";
+    // тренды по сравнению с точкой 5 минут назад
+    String tT = found ? getTrend(temp, past.temperature) : "St";
+    String hT = found ? getTrend(hum,  past.humidity)    : "St";
+    String pT = found ? getTrend(pres, past.pressure)    : "St";
 
-    // OLED вывод
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
+    // накопление для средних
+    totalTemp += temp;
+    totalHum  += hum;
+    totalPres += pres;
+    totalCount++;
+
+    float avgTemp = totalTemp / totalCount;
+    float avgHum  = totalHum  / totalCount;
+    float avgPres = totalPres / totalCount;
 
     unsigned long uptimeSec = millis() / 1000;
     int hh = uptimeSec / 3600;
     int mm = (uptimeSec % 3600) / 60;
-    int ss = uptimeSec % 60;
-    display.printf("DATA %02d:%02d:%02d\n", hh, mm, ss);
 
-    display.printf("T: %.1f C %s\n", now.temperature, tT.c_str());
-    display.printf("H: %.1f %% %s\n", now.humidity, hT.c_str());
-    display.printf("P: %.1f hPa %s\n", now.pressure, pT.c_str());
+    display.clearDisplay();
+
+    if (showSimpleScreen) {
+      display.setTextSize(2);
+      display.setCursor(0, 0);
+      display.printf("T: %.1f\n", temp);
+      display.printf("H: %.0f %%\n", hum);
+      display.printf("P: %.0f\n", pres);
+
+      if (WiFi.status() == WL_CONNECTED) {
+        timeClient.update();
+        int ntpHH = timeClient.getHours();
+        int ntpMM = timeClient.getMinutes();
+        display.setCursor(0, SCREEN_HEIGHT - 14);
+        display.setTextSize(2);
+        display.printf(" %02d:%02d\n", ntpHH, ntpMM);
+      }  
+        
+    } else {
+      display.setTextSize(1);
+      display.setCursor(0, 0);
+      display.printf(" DATA %02d:%02d\n", hh, mm);
+      display.printf("T: %.1f C %s\n", temp, tT.c_str());
+      display.printf(" %.1f \n", avgTemp);
+      display.printf("H: %.1f %% %s\n", hum, hT.c_str());
+      display.printf(" %.1f\n", avgHum);
+      display.printf("P: %.1f %s\n", pres, pT.c_str());
+      display.printf(" %.1f\n", avgPres);
+    }
+
     display.display();
-
   }
 }
