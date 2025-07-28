@@ -1,4 +1,4 @@
-// 27.07 тренд истории + сравнение со средним значением
+// 29.07 изменение вывода на экран + время, изменение логики
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -82,6 +82,7 @@ void setupWiFi() {
     display.print("IP:");
     display.println(WiFi.localIP());
     display.display();
+    delay(500);
     timeClient.begin();
     timeClient.update();
   } else {
@@ -162,11 +163,10 @@ void loop() {
     float pres = bme.readPressure() / 100.0;
     unsigned long nowSec = millis() / 1000;
 
-    // сохранить в буфер
     history[currentIndex] = { nowSec, temp, hum, pres };
     currentIndex = (currentIndex + 1) % MAX_HISTORY;
 
-    // найти точку 5 минут назад
+    //ровно 5 минут назад...
     SensorReading past = { 0, 0, 0, 0 };
     bool found = false;
 
@@ -181,12 +181,10 @@ void loop() {
       }
     }
 
-    // тренды по сравнению с точкой 5 минут назад
     String tT = found ? getTrend(temp, past.temperature) : "St";
     String hT = found ? getTrend(hum,  past.humidity)    : "St";
     String pT = found ? getTrend(pres, past.pressure)    : "St";
 
-    // накопление для средних
     totalTemp += temp;
     totalHum  += hum;
     totalPres += pres;
