@@ -1,0 +1,68 @@
+{
+	"folders": [
+		{
+			"path": "../Uno"
+		},
+		{
+			"name": "8266",
+			"path": "../8266"
+		},
+		{
+			"name": "Wemos",
+			"path": "../Wemos"
+		},
+		{
+			"name": "esp01s",
+			"path": "../esp01s"
+		},
+		{
+			"name": "esp01sOTA",
+			"path": "../esp01sOTA"
+		},
+		{
+			"name": "ota",
+			"path": "../ota"
+		},
+		{
+			"name": "Di01",
+			"path": "../Di01"
+		},
+		{
+			"name": "Uno (копия)",
+			"path": "../Uno (копия)"
+		},
+		{
+			"name": "esp32",
+			"path": "../esp32"
+		},
+		{
+			"name": "s32",
+			"path": "../s32"
+		},
+		{
+			"name": "32event",
+			"path": "../32event"
+		},
+		{
+			"name": "freertos32",
+			"path": "../freertos32"
+		},
+		{
+			"name": "esp01s 2",
+			"path": "../esp01s 2"
+		},
+		{
+			"name": "EtOH",
+			"path": "../EtOH"
+		},
+		{
+			"name": "Prtbl",
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"freertos.h": "c"
+		}
+	}
+}
