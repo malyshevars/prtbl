@@ -2,7 +2,9 @@
 // 18.08 Микроклимат, веб-страницы / /temp /hum /pres, пин реле D2
 // 19.08 массив клавиатуры
 // 13.12 АЕ3000 Коробочка эдишн. Кнопка, экран, реле, питание, BME280(температура, влажность и давление) и все в распределительной коробке с удлинителем на 3 слота 10А ^
-// + Wi-Fi, сайт/апи, тг бот, ntp и OTA
+// + Wi-Fi, сайт/апи, тг бот, ntp и OTA (но это на тоненького)
+
+#include <Arduino.h>
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -25,7 +27,7 @@
 #define OLED_SDA D5
 #define OLED_SCL D6
 
-#define RELAY_PIN D2  // GPIO4
+#define RELAY_PIN D2 
 #define BUTTON_PIN D1 
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -106,7 +108,7 @@ void i2cScan() {
     }
   }
   if (count == 0) Serial.println(F("  (no devices)"));
-  Serial.println(F("[I2C] Scan done.\n"));
+  Serial.println(F("[I2C] Ok\n"));
 }
 
 void printBMEToSerial(float t, float h, float p) {
@@ -338,18 +340,10 @@ void setupTelegram() {
   Serial.println(F("[TG] Bot ready."));
   if (WiFi.status() == WL_CONNECTED) {
     bot->sendMessageWithReplyKeyboard(chatId5,
-        "Напиши «В спальне».",
+        "«В спальне»",
         "", KB_MICRO, true, false, false);
   }
 }
-
-/*
-void toggleRelay() {
-  relayState = !relayState;
-  digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
-  Serial.printf("[RELAY] now: %s\n", relayState ? "ON" : "OFF");
-}
-*/
 
 void setup() {
   Serial.begin(115200);
@@ -366,10 +360,10 @@ void setup() {
   Wire.setClock(400000);
   i2cScan();
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { //Не убирааать! ломается всё...
     Serial.println(F("OLED error"));
     while (true) {
-      Serial.println(F("Retry OLED in 3s..."));
+      Serial.println(F("Retry OLED..."));
       delay(3000);
       if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) break;
     }
@@ -379,7 +373,7 @@ void setup() {
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("AE PRTBL");
+  display.println("AE3000 PRTBL");
   display.display();
   delay(800);
 
@@ -389,7 +383,7 @@ void setup() {
     bme_ok = bme.begin(0x77);
   }
   if (!bme_ok) {
-    Serial.println(F("BME280 error (no device 0x76/0x77)"));
+    Serial.println(F("BME280 error"));
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -397,7 +391,7 @@ void setup() {
     display.display();
   } else {
     uint8_t id = bme.sensorID();
-    Serial.printf("BME/BMP detected, chipID=0x%02X\n", id);
+    Serial.printf("BME/BMP chipID=0x%02X\n", id);
   }
 
   setupWiFi();
@@ -443,7 +437,7 @@ void loop() {
     unsigned long nowSec = millis() / 1000;
 
     if (isnan(temp) || isnan(pres)) {
-      Serial.println(F("[WARN] NaN from sensor; retry once..."));
+      Serial.println(F("[WARN] NaN"));
       delay(10);
       temp = bme.readTemperature();
       hum  = bme.readHumidity();
