@@ -1,6 +1,8 @@
 // 29.07 изменение вывода на экран + время, изменение логики
-// 18.08 Telegram "Микроклимат", веб-страницы / /temp /hum /pres, пин реле D2
-// 19.08 токены -> botToken364/chatId5; правки Telegram: буферы TLS, массив клавиатуры
+// 18.08 Микроклимат, веб-страницы / /temp /hum /pres, пин реле D2
+// 19.08 массив клавиатуры
+// 13.12 АЕ3000 Коробочка эдишн. Кнопка, экран, реле, питание, BME280(температура, влажность и давление) и все в распределительной коробке с удлинителем на 3 слота 10А ^
+// + Wi-Fi, сайт/апи, тг бот, ntp и OTA
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -11,22 +13,20 @@
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 
-// Telegram + HTTPS
 #include <WiFiClientSecureBearSSL.h>
 #include <UniversalTelegramBot.h>
 
-// Веб-сервер
 #include <ESP8266WebServer.h>
 
-#include "config.h"  // extern: ssid, password, botToken364, chatId5
+#include "config.h"  
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_SDA D5
 #define OLED_SCL D6
 
-// Пин реле (свободный; пока не используется в логике)
 #define RELAY_PIN D2  // GPIO4
+#define BUTTON_PIN D1 
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
@@ -34,21 +34,23 @@ Adafruit_BME280 bme;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 3 * 3600, 180000);
 
-// Telegram
+
 std::unique_ptr<BearSSL::WiFiClientSecure> tgClient;
 UniversalTelegramBot* bot = nullptr;
 unsigned long lastBotPoll = 0;
 const unsigned long BOT_POLL_INTERVAL = 2200; // мс
 
-// Веб
 ESP8266WebServer server(80);
 
-// Экран
+bool relayState = false;             
+unsigned long lastButtonTime = 0;    
+const unsigned long DEBOUNCE = 10;  
+
 bool showSimpleScreen = false;
 unsigned long lastToggleTime = 0;
 const unsigned long TOGGLE_INTERVAL = 10000;
 
-// Данные датчика
+
 const unsigned long INTERVAL = 5000;
 const int  MAX_HISTORY = 121;
 const unsigned long TREND_PERIOD_SEC = 300;
@@ -66,13 +68,31 @@ SensorReading history[MAX_HISTORY];
 float totalTemp = 0, totalHum = 0, totalPres = 0;
 unsigned long totalCount = 0;
 
-// Последние измерения для веб/тг
+
 float lastTemp = NAN, lastHum = NAN, lastPres = NAN;
 
-// ===== клавиатура как МАССИВ (для UniversalTelegramBot::sendMessageWithReplyKeyboard) =====
-const char KB_MICRO[] = "[[\"Микроклимат\"]]";
 
-// ===================== Утилиты =====================
+const char KB_MICRO[] = "[[\"В спальне\"]]";
+
+String trendTempText = "стабильно"; 
+String trendHumText  = "стабильно";   
+String trendPresText = "стабильно";   
+
+String trendRu(const String& code) {   
+  if (code == "H") return "растет";
+  if (code == "L") return "падает";
+  return "стабильно";
+}
+
+void setRelay(bool on) {
+  relayState = on;
+  digitalWrite(RELAY_PIN, on ? LOW : HIGH);  // активный LOW
+  Serial.printf("[RELAY] now: %s (pin=%d)\n", on ? "ON" : "OFF", digitalRead(RELAY_PIN));
+}
+
+void toggleRelay() {
+  setRelay(!relayState);
+}
 
 void i2cScan() {
   Serial.println(F("\n[I2C] Scan..."));
@@ -106,7 +126,7 @@ String getTrend(float now, float ref) {
   return "S";
 }
 
-// ===================== Wi-Fi / OTA =====================
+
 
 void setupWiFi() {
   WiFi.mode(WIFI_STA);
@@ -163,7 +183,7 @@ void setupOTA() {
   ArduinoOTA.begin();
 }
 
-// ===================== Веб =====================
+
 
 String htmlWrap(const String& title, const String& body) {
   String s = F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
@@ -217,26 +237,78 @@ void handlePres() {
               htmlWrap("Давление", "<h1>Давление</h1><p class='v'>"+v+" hPa</p>"));
 }
 
+void handleRelayOn() {
+  setRelay(true);  
+  server.send(200, "text/html; charset=utf-8",
+              htmlWrap("Реле", "<h1>Реле включено</h1><p><a href=\"/\">Назад</a></p>"));
+}
+
+void handleRelayOff() {
+  setRelay(false); 
+  server.send(200, "text/html; charset=utf-8",
+              htmlWrap("Реле", "<h1>Реле выключено</h1><p><a href=\"/\">Назад</a></p>"));
+}
+  
+void handleButton() {
+  static bool lastReading = HIGH;      
+  static bool stableState = HIGH;      
+  static unsigned long lastChange = 0; 
+
+  bool reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastReading) {
+    lastChange = millis();
+    lastReading = reading;
+  }
+
+  if (millis() - lastChange >= DEBOUNCE) {
+    if (reading != stableState) {
+      stableState = reading;
+
+      if (stableState == LOW) {
+        toggleRelay();
+        Serial.println("Кнопка");
+      }
+    }
+  }
+}
+
 void setupWeb() {
+
   server.on("/", handleRoot);
   server.on("/temp", handleTemp);
   server.on("/hum", handleHum);
   server.on("/pres", handlePres);
+
+  server.on("/relay/on", handleRelayOn);
+  server.on("/relay/off", handleRelayOff);
+
   server.begin();
   Serial.println(F("[WEB] HTTP server started on :80"));
 }
 
-// ===================== Telegram =====================
+
 
 String makeSummaryText() {
-  String t = F("🌡 <b>Микроклимат</b>\n");
+  String t = F("🌡 <b>В спальне:</b>\n");
+
   t += F("T: ");
   t += isnan(lastTemp) ? "—" : String(lastTemp, 2);
-  t += F(" °C\nH: ");
+  t += F(" °C");
+  if (!isnan(lastTemp)) { t += F(" ("); t += trendTempText; t += F(")"); }  
+  t += '\n';
+
+  t += F("H: ");
   t += isnan(lastHum) ? "—" : String(lastHum, 1);
-  t += F(" %\nP: ");
+  t += F(" %");
+  if (!isnan(lastHum)) { t += F(" ("); t += trendHumText; t += F(")"); }    
+  t += '\n';
+
+  t += F("P: ");
   t += isnan(lastPres) ? "—" : String(lastPres, 1);
   t += F(" hPa");
+  if (!isnan(lastPres)) { t += F(" ("); t += trendPresText; t += F(")"); }  
+
   return t;
 }
 
@@ -249,36 +321,35 @@ void handleNewMessages(int numNewMessages) {
     Serial.printf("[TG] msg from %s (%s): %s\n", from.c_str(), chat_id.c_str(), text.c_str());
 
     // реагируем только на определённые сообщения
-    if (text == "Микроклимат" || text == "/microclimate" || text == "/start" || text == "/kb") {
+    if (text == "В спальне" || text == "/microclimate" || text == "/start" || text == "/kb") {
       String payload = makeSummaryText();
-      bot->sendMessage(chat_id, payload, "HTML");
-
-      // показать клавиатуру
-      bot->sendMessageWithReplyKeyboard(
-          chat_id,"Приемлемо. ", "", KB_MICRO, true, false, false);
+      bot->sendMessageWithReplyKeyboard(chat_id, makeSummaryText(), "HTML", KB_MICRO, true, false, false);
     }
-
   }
 }
 
 void setupTelegram() {
   tgClient.reset(new BearSSL::WiFiClientSecure());
-  tgClient->setInsecure();              // без проверки сертификатов (упрощённо)
-  tgClient->setBufferSizes(2048, 1024); // важно для стабильности ответов TG
+  tgClient->setInsecure();              
+  tgClient->setBufferSizes(2048, 1024); 
 
   bot = new UniversalTelegramBot(botToken364, *tgClient);
 
   Serial.println(F("[TG] Bot ready."));
   if (WiFi.status() == WL_CONNECTED) {
-    // Если chatId5 — группа, reply-клава поддерживается (в канале — нет).
-    bot->sendMessage(chatId5, "✅ Устройство онлайн. Напишите «Микроклимат».", "");
     bot->sendMessageWithReplyKeyboard(chatId5,
-        "Клавиатура включена для чата.",
+        "Напиши «В спальне».",
         "", KB_MICRO, true, false, false);
   }
 }
 
-// ===================== SETUP / LOOP =====================
+/*
+void toggleRelay() {
+  relayState = !relayState;
+  digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
+  Serial.printf("[RELAY] now: %s\n", relayState ? "ON" : "OFF");
+}
+*/
 
 void setup() {
   Serial.begin(115200);
@@ -287,7 +358,9 @@ void setup() {
   Serial.println(F("Booting..."));
 
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
+//  digitalWrite(RELAY_PIN, LOW);
+  setRelay(false);
+  pinMode(BUTTON_PIN, INPUT_PULLUP); 
 
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(400000);
@@ -332,7 +405,7 @@ void setup() {
   setupWeb();
   setupTelegram();
 
-  // Первое чтение
+
   lastTemp = bme.readTemperature();
   lastHum  = bme.readHumidity();
   lastPres = bme.readPressure() / 100.0;
@@ -341,10 +414,12 @@ void setup() {
 }
 
 void loop() {
-  ArduinoOTA.handle();
-  server.handleClient();
 
-  // Telegram polling (long polling вручную)
+  ArduinoOTA.handle();
+  server.handleClient(); 
+
+  handleButton();
+
   if (WiFi.status() == WL_CONNECTED && millis() - lastBotPoll > BOT_POLL_INTERVAL) {
     lastBotPoll = millis();
     int numNew = bot->getUpdates(bot->last_message_received + 1);
@@ -375,7 +450,6 @@ void loop() {
       pres = bme.readPressure() / 100.0;
     }
 
-    // сохранить для веб/тг
     lastTemp = temp;
     lastHum  = hum;
     lastPres = pres;
@@ -385,7 +459,7 @@ void loop() {
     history[currentIndex] = { nowSec, temp, hum, pres };
     currentIndex = (currentIndex + 1) % MAX_HISTORY;
 
-    // поиск значения ~5 минут назад
+
     SensorReading past = { 0, 0, 0, 0 };
     bool found = false;
     for (int i = MAX_HISTORY - 1; i > 0; i--) {
@@ -401,6 +475,10 @@ void loop() {
     String tT = found ? getTrend(temp, past.temperature) : "St";
     String hT = found ? getTrend(hum,  past.humidity)    : "St";
     String pT = found ? getTrend(pres, past.pressure)    : "St";
+
+    trendTempText = trendRu(tT);
+    trendHumText  = trendRu(hT);
+    trendPresText = trendRu(pT);
 
     totalTemp += temp; totalHum += hum; totalPres += pres; totalCount++;
     float avgTemp = totalTemp / totalCount;
@@ -443,3 +521,4 @@ void loop() {
     display.display();
   }
 }
+ 

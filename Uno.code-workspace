@@ -58,11 +58,24 @@
 		{
 			"name": "Prtbl",
 			"path": "."
+		},
+		{
+			"name": "Exp",
+			"path": "../Exp"
+		},
+		{
+			"name": "Di2",
+			"path": "../Di2"
+		},
+		{
+			"name": "Pivo",
+			"path": "../Pivo"
 		}
 	],
 	"settings": {
 		"files.associations": {
-			"freertos.h": "c"
+			"freertos.h": "c",
+			"cmath": "cpp"
 		}
 	}
 }
