@@ -44,9 +44,21 @@ const unsigned long BOT_POLL_INTERVAL = 2200; // мс
 
 ESP8266WebServer server(80);
 
+volatile bool g_btnEvent = false;
+volatile uint32_t g_btnIrqMs = 0;
+
+void ICACHE_RAM_ATTR onButtonFall() {
+  uint32_t now = millis();
+  // антидребезг на уровне IRQ (50 мс)
+  if (now - g_btnIrqMs > 50) {
+    g_btnIrqMs = now;
+    g_btnEvent = true;
+  }
+}
+
 bool relayState = false;             
 unsigned long lastButtonTime = 0;    
-const unsigned long DEBOUNCE = 10;  
+const unsigned long DEBOUNCE = 50;  
 
 bool showSimpleScreen = false;
 unsigned long lastToggleTime = 0;
@@ -240,13 +252,13 @@ void handlePres() {
 }
 
 void handleRelayOn() {
-  setRelay(true);  
+  setRelay(false);  
   server.send(200, "text/html; charset=utf-8",
               htmlWrap("Реле", "<h1>Реле включено</h1><p><a href=\"/\">Назад</a></p>"));
 }
 
 void handleRelayOff() {
-  setRelay(false); 
+  setRelay(true); 
   server.send(200, "text/html; charset=utf-8",
               htmlWrap("Реле", "<h1>Реле выключено</h1><p><a href=\"/\">Назад</a></p>"));
 }
@@ -356,8 +368,19 @@ void setup() {
   setRelay(false);
   pinMode(BUTTON_PIN, INPUT_PULLUP); 
 
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonFall, FALLING);
+
   Wire.begin(OLED_SDA, OLED_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);
+  Wire.setClockStretchLimit(150000);   
+
+ // display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("OLED not found"));
+  }
+
+/*
   i2cScan();
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { //Не убирааать! ломается всё...
@@ -368,6 +391,7 @@ void setup() {
       if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) break;
     }
   }
+*/
 
   display.clearDisplay();
   display.setTextSize(2);
@@ -411,16 +435,28 @@ void loop() {
 
   ArduinoOTA.handle();
   server.handleClient(); 
+  yield();
 
-  handleButton();
+  //handleButton();
+
+  if (g_btnEvent) {
+    g_btnEvent = false;
+    // доп. проверка что кнопка действительно нажата (на случай помех)
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      toggleRelay();
+      Serial.println("Кнопка (IRQ)");
+    }
+  }
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastBotPoll > BOT_POLL_INTERVAL) {
     lastBotPoll = millis();
+
     int numNew = bot->getUpdates(bot->last_message_received + 1);
-    while (numNew) {
+    if (numNew > 0) {
       handleNewMessages(numNew);
-      numNew = bot->getUpdates(bot->last_message_received + 1);
     }
+
+    yield(); // обязательно для ESP8266
   }
 
   if (millis() - lastToggleTime >= TOGGLE_INTERVAL) {
