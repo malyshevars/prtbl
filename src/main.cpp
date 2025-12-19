@@ -1,8 +1,10 @@
 // 29.07 изменение вывода на экран + время, изменение логики
 // 18.08 Микроклимат, веб-страницы / /temp /hum /pres, пин реле D2
 // 19.08 массив клавиатуры
-// 13.12 АЕ3000 Коробочка эдишн. Кнопка, экран, реле, питание, BME280(температура, влажность и давление) и все в распределительной коробке с удлинителем на 3 слота 10А ^
-// + Wi-Fi, сайт/апи, тг бот, ntp и OTA (но это на тоненького)
+// 13.12 АЕ3000 Коробочка эдишн. Кнопка, выключатель, экран, реле, питание, BME280(температура, влажность и давление) и все в распределительной коробке с удлинителем на 3 слота 10А ^
+// + Wi-Fi, сайт/апи, тг бот, ntp и OTA 
+//18.12 наконец работает надежнее
+//19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее 
 
 #include <Arduino.h>
 
@@ -49,7 +51,6 @@ volatile uint32_t g_btnIrqMs = 0;
 
 void ICACHE_RAM_ATTR onButtonFall() {
   uint32_t now = millis();
-  // антидребезг на уровне IRQ (50 мс)
   if (now - g_btnIrqMs > 50) {
     g_btnIrqMs = now;
     g_btnEvent = true;
@@ -60,16 +61,19 @@ bool relayState = false;
 unsigned long lastButtonTime = 0;    
 const unsigned long DEBOUNCE = 50;  
 
+/*
 bool showSimpleScreen = false;
 unsigned long lastToggleTime = 0;
 const unsigned long TOGGLE_INTERVAL = 10000;
-
+*/
 
 const unsigned long INTERVAL = 5000;
+unsigned long lastUpdate = 0;
+/*
 const int  MAX_HISTORY = 121;
 const unsigned long TREND_PERIOD_SEC = 300;
 int currentIndex = 0;
-unsigned long lastUpdate = 0;
+
 
 struct SensorReading {
   uint32_t timestamp;
@@ -81,22 +85,25 @@ SensorReading history[MAX_HISTORY];
 
 float totalTemp = 0, totalHum = 0, totalPres = 0;
 unsigned long totalCount = 0;
-
+*/
 
 float lastTemp = NAN, lastHum = NAN, lastPres = NAN;
 
 
 const char KB_MICRO[] = "[[\"В спальне\"]]";
 
+/*
 String trendTempText = "стабильно"; 
 String trendHumText  = "стабильно";   
 String trendPresText = "стабильно";   
+
 
 String trendRu(const String& code) {   
   if (code == "H") return "растет";
   if (code == "L") return "падает";
   return "стабильно";
 }
+*/
 
 void setRelay(bool on) {
   relayState = on;
@@ -107,7 +114,7 @@ void setRelay(bool on) {
 void toggleRelay() {
   setRelay(!relayState);
 }
-
+/*
 void i2cScan() {
   Serial.println(F("\n[I2C] Scan..."));
   byte count = 0;
@@ -122,6 +129,7 @@ void i2cScan() {
   if (count == 0) Serial.println(F("  (no devices)"));
   Serial.println(F("[I2C] Ok\n"));
 }
+*/
 
 void printBMEToSerial(float t, float h, float p) {
   Serial.print(F("[BME/BMP] T="));
@@ -133,47 +141,61 @@ void printBMEToSerial(float t, float h, float p) {
   Serial.println();
 }
 
+/*
 String getTrend(float now, float ref) {
   float d = now - ref;
   if (d > 0.3) return "H";
   if (d < -0.3) return "L";
   return "S";
 }
-
+*/
 
 
 void setupWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
 
-  Serial.print("WiFi...");
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.setTextSize(1);
-  display.println(" Connecting...");
-  display.display();
+  auto tryConnect = [](const char* s, const char* p) -> bool {
+    Serial.printf("WiFi try: %s\n", s);
+    WiFi.begin(s, p);
 
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(500);
-    Serial.print(".");
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      delay(500);
+      yield();
+    }
+    return WiFi.status() == WL_CONNECTED;
+  };
+
+  if (!tryConnect(ssid, password)) {
+    Serial.println("Primary WiFi failed, try backup...");
+    tryConnect(ssid2, password2);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi OK");
-    Serial.print("IP: "); Serial.println(WiFi.localIP());
+    Serial.println("WiFi OK");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
     display.println("WiFi OK");
-    display.print("IP:"); display.println(WiFi.localIP());
+    display.println(WiFi.localIP());
     display.display();
-    delay(500);
+
     timeClient.begin();
     timeClient.update();
   } else {
-    Serial.println("\nWiFi FAIL");
+    Serial.println("WiFi FAIL");
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
     display.println("WiFi FAIL");
     display.display();
   }
 }
+
 
 void setupOTA() {
   ArduinoOTA.onStart([]() {
@@ -196,7 +218,6 @@ void setupOTA() {
   });
   ArduinoOTA.begin();
 }
-
 
 
 String htmlWrap(const String& title, const String& body) {
@@ -235,34 +256,33 @@ void handleRoot() {
            isnan(lastPres) ? "—" : String(lastPres, 1).c_str());
   server.send(200, "text/html; charset=utf-8", htmlWrap("Сводка", buf));
 }
+
 void handleTemp() {
   String v = isnan(lastTemp) ? "—" : String(lastTemp, 2);
-  server.send(200, "text/html; charset=utf-8",
-              htmlWrap("Температура", "<h1>Температура</h1><p class='v'>"+v+" °C</p>"));
+  server.send(200, "text/html; charset=utf-8", htmlWrap("Температура", "<h1>Температура</h1><p class='v'>"+v+" °C</p>"));
 }
+
 void handleHum() {
   String v = isnan(lastHum) ? "—" : String(lastHum, 1);
-  server.send(200, "text/html; charset=utf-8",
-              htmlWrap("Влажность", "<h1>Влажность</h1><p class='v'>"+v+" %</p>"));
+  server.send(200, "text/html; charset=utf-8", htmlWrap("Влажность", "<h1>Влажность</h1><p class='v'>"+v+" %</p>"));
 }
+
 void handlePres() {
   String v = isnan(lastPres) ? "—" : String(lastPres, 1);
-  server.send(200, "text/html; charset=utf-8",
-              htmlWrap("Давление", "<h1>Давление</h1><p class='v'>"+v+" hPa</p>"));
+  server.send(200, "text/html; charset=utf-8", htmlWrap("Давление", "<h1>Давление</h1><p class='v'>"+v+" hPa</p>"));
 }
 
 void handleRelayOn() {
   setRelay(false);  
-  server.send(200, "text/html; charset=utf-8",
-              htmlWrap("Реле", "<h1>Реле включено</h1><p><a href=\"/\">Назад</a></p>"));
+  server.send(200, "text/html; charset=utf-8", htmlWrap("Реле", "<h1>Реле включено</h1><p><a href=\"/\">Назад</a></p>"));
 }
 
 void handleRelayOff() {
   setRelay(true); 
-  server.send(200, "text/html; charset=utf-8",
-              htmlWrap("Реле", "<h1>Реле выключено</h1><p><a href=\"/\">Назад</a></p>"));
+  server.send(200, "text/html; charset=utf-8", htmlWrap("Реле", "<h1>Реле выключено</h1><p><a href=\"/\">Назад</a></p>"));
 }
-  
+
+/*
 void handleButton() {
   static bool lastReading = HIGH;      
   static bool stableState = HIGH;      
@@ -286,6 +306,7 @@ void handleButton() {
     }
   }
 }
+*/
 
 void setupWeb() {
 
@@ -301,27 +322,20 @@ void setupWeb() {
   Serial.println(F("[WEB] HTTP server started on :80"));
 }
 
-
-
 String makeSummaryText() {
   String t = F("🌡 <b>В спальне:</b>\n");
 
   t += F("T: ");
   t += isnan(lastTemp) ? "—" : String(lastTemp, 2);
-  t += F(" °C");
-  if (!isnan(lastTemp)) { t += F(" ("); t += trendTempText; t += F(")"); }  
-  t += '\n';
+  t += F(" °C\n");
 
   t += F("H: ");
   t += isnan(lastHum) ? "—" : String(lastHum, 1);
-  t += F(" %");
-  if (!isnan(lastHum)) { t += F(" ("); t += trendHumText; t += F(")"); }    
-  t += '\n';
+  t += F(" %\n");
 
   t += F("P: ");
   t += isnan(lastPres) ? "—" : String(lastPres, 1);
   t += F(" hPa");
-  if (!isnan(lastPres)) { t += F(" ("); t += trendPresText; t += F(")"); }  
 
   return t;
 }
@@ -434,14 +448,11 @@ void setup() {
 void loop() {
 
   ArduinoOTA.handle();
-  server.handleClient(); 
+  server.handleClient();
   yield();
-
-  //handleButton();
 
   if (g_btnEvent) {
     g_btnEvent = false;
-    // доп. проверка что кнопка действительно нажата (на случай помех)
     if (digitalRead(BUTTON_PIN) == LOW) {
       toggleRelay();
       Serial.println("Кнопка (IRQ)");
@@ -450,18 +461,11 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastBotPoll > BOT_POLL_INTERVAL) {
     lastBotPoll = millis();
-
     int numNew = bot->getUpdates(bot->last_message_received + 1);
     if (numNew > 0) {
       handleNewMessages(numNew);
     }
-
-    yield(); // обязательно для ESP8266
-  }
-
-  if (millis() - lastToggleTime >= TOGGLE_INTERVAL) {
-    showSimpleScreen = !showSimpleScreen;
-    lastToggleTime = millis();
+    yield();
   }
 
   if (millis() - lastUpdate >= INTERVAL) {
@@ -470,11 +474,10 @@ void loop() {
     float temp = bme.readTemperature();
     float hum  = bme.readHumidity();
     float pres = bme.readPressure() / 100.0;
-    unsigned long nowSec = millis() / 1000;
 
-    if (isnan(temp) || isnan(pres)) {
+    if (isnan(temp) || isnan(hum) || isnan(pres)) {
       Serial.println(F("[WARN] NaN"));
-      delay(10);
+      yield();
       temp = bme.readTemperature();
       hum  = bme.readHumidity();
       pres = bme.readPressure() / 100.0;
@@ -484,71 +487,23 @@ void loop() {
     lastHum  = hum;
     lastPres = pres;
 
-    //printBMEToSerial(temp, hum, pres);
-
-    history[currentIndex] = { nowSec, temp, hum, pres };
-    currentIndex = (currentIndex + 1) % MAX_HISTORY;
-
-
-    SensorReading past = { 0, 0, 0, 0 };
-    bool found = false;
-    for (int i = MAX_HISTORY - 1; i > 0; i--) {
-      int idx = (currentIndex - i + MAX_HISTORY) % MAX_HISTORY;
-      if (history[idx].timestamp == 0) continue;
-      if ((nowSec - history[idx].timestamp) >= TREND_PERIOD_SEC) {
-        past = history[idx];
-        found = true;
-        break;
-      }
-    }
-
-    String tT = found ? getTrend(temp, past.temperature) : "St";
-    String hT = found ? getTrend(hum,  past.humidity)    : "St";
-    String pT = found ? getTrend(pres, past.pressure)    : "St";
-
-    trendTempText = trendRu(tT);
-    trendHumText  = trendRu(hT);
-    trendPresText = trendRu(pT);
-
-    totalTemp += temp; totalHum += hum; totalPres += pres; totalCount++;
-    float avgTemp = totalTemp / totalCount;
-    float avgHum  = totalHum  / totalCount;
-    float avgPres = totalPres / totalCount;
-
-    unsigned long uptimeSec = millis() / 1000;
-    int hh = uptimeSec / 3600;
-    int mm = (uptimeSec % 3600) / 60;
-
     display.clearDisplay();
+    display.setTextSize(2);
+    display.setCursor(0, 0);
 
-    if (showSimpleScreen) {
-      display.setTextSize(2);
-      display.setCursor(0, 0);
-      display.printf("T: %.1f\n", temp);
-      display.printf("H: %.0f %%\n", hum);
-      display.printf("P: %.0f\n", pres);
-
-      if (WiFi.status() == WL_CONNECTED) {
-        timeClient.update();
-        int ntpHH = timeClient.getHours();
-        int ntpMM = timeClient.getMinutes();
-        display.setCursor(0, SCREEN_HEIGHT - 14);
-        display.setTextSize(2);
-        display.printf(" %02d:%02d\n", ntpHH, ntpMM);
-      }
+    if (WiFi.status() == WL_CONNECTED) {
+      timeClient.update();
+      display.printf("%02d:%02d\n",
+                     timeClient.getHours(),
+                     timeClient.getMinutes());
     } else {
-      display.setTextSize(1);
-      display.setCursor(0, 0);
-      display.printf(" DATA %02d:%02d\n", hh, mm);
-      display.printf("T: %.1f C %s\n", temp, tT.c_str());
-      display.printf(" %.1f \n", avgTemp);
-      display.printf("H: %.1f %% %s\n", hum, hT.c_str());
-      display.printf(" %.1f\n", avgHum);
-      display.printf("P: %.1f %s\n", pres, pT.c_str());
-      display.printf(" %.1f\n", avgPres);
+      display.println("--:--");
     }
+
+    display.printf("T: %.1f C\n", lastTemp);
+    display.printf("H: %.1f %%\n", lastHum);
+    display.printf("P: %.1f hPa\n", lastPres);
 
     display.display();
   }
 }
- 
