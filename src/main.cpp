@@ -5,6 +5,7 @@
 // + Wi-Fi, сайт/апи, тг бот, ntp и OTA 
 //18.12 наконец работает надежнее
 //19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее, 2 wifi
+//20.12 +расписание +тг переделка и изменены делеи
 
 #include <Arduino.h>
 
@@ -32,7 +33,32 @@
 #define RELAY_PIN D2 
 #define BUTTON_PIN D1 
 
-bool useSchedule = true;
+#define PIR_PIN D7 
+
+bool useSchedule = false;
+
+volatile bool g_pirEvent = false;
+unsigned long lastPirTime = 0;
+const unsigned long PIR_COOLDOWN = 30000; 
+
+volatile bool g_btnEvent = false;
+volatile uint32_t g_btnIrqMs = 0;
+
+unsigned long lastMotionTime = 0;
+const unsigned long LIGHT_TIMEOUT = 1UL * 60UL * 1000UL;
+
+
+void ICACHE_RAM_ATTR onButtonFall() {
+  uint32_t now = millis();
+  if (now - g_btnIrqMs > 100) {
+    g_btnIrqMs = now;
+    g_btnEvent = true;
+  }
+}
+
+bool relayState = false;             
+unsigned long lastButtonTime = 0;    
+const unsigned long DEBOUNCE = 1000;  
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
@@ -48,9 +74,6 @@ const unsigned long BOT_POLL_INTERVAL = 2200; // мс
 
 ESP8266WebServer server(80);
 
-volatile bool g_btnEvent = false;
-volatile uint32_t g_btnIrqMs = 0;
-
 bool relayBySchedule() {
   if (WiFi.status() != WL_CONNECTED) return false;
 
@@ -63,18 +86,6 @@ bool relayBySchedule() {
   return night || morning;
 }
 
-
-void ICACHE_RAM_ATTR onButtonFall() {
-  uint32_t now = millis();
-  if (now - g_btnIrqMs > 50) {
-    g_btnIrqMs = now;
-    g_btnEvent = true;
-  }
-}
-
-bool relayState = false;             
-unsigned long lastButtonTime = 0;    
-const unsigned long DEBOUNCE = 50;  
 
 
 /*
@@ -106,7 +117,7 @@ unsigned long totalCount = 0;
 float lastTemp = NAN, lastHum = NAN, lastPres = NAN;
 
 
-const char KB_MICRO[] = "[[\"В спальне\"]]";
+const char KB_MICRO[] = "[[\"Климат\"]]";
 
 /*
 String trendTempText = "стабильно"; 
@@ -120,6 +131,10 @@ String trendRu(const String& code) {
   return "стабильно";
 }
 */
+
+void ICACHE_RAM_ATTR onPirRise() {
+  g_pirEvent = true;
+}
 
 void setRelay(bool on) {
   relayState = on;
@@ -339,7 +354,7 @@ void setupWeb() {
 }
 
 String makeSummaryText() {
-  String t = F("🌡 <b>В спальне:</b>\n");
+  String t = F("🌡 <b>Климат:</b>\n");
 
   t += F("T: ");
   t += isnan(lastTemp) ? "—" : String(lastTemp, 2);
@@ -365,7 +380,7 @@ void handleNewMessages(int numNewMessages) {
     Serial.printf("[TG] msg from %s (%s): %s\n", from.c_str(), chat_id.c_str(), text.c_str());
 
     // реагируем только на определённые сообщения
-    if (text == "В спальне" || text == "/microclimate" || text == "/start" || text == "/kb") {
+    if (text == "Климат" || text == "/microclimate" || text == "/start" || text == "/kb") {
       String payload = makeSummaryText();
       bot->sendMessageWithReplyKeyboard(chat_id, makeSummaryText(), "HTML", KB_MICRO, true, false, false);
     }
@@ -382,7 +397,7 @@ void setupTelegram() {
   Serial.println(F("[TG] Bot ready."));
   if (WiFi.status() == WL_CONNECTED) {
     bot->sendMessageWithReplyKeyboard(chatId5,
-        "«В спальне»",
+        "«Климат»",
         "", KB_MICRO, true, false, false);
   }
 }
@@ -397,6 +412,9 @@ void setup() {
 //  digitalWrite(RELAY_PIN, LOW);
   setRelay(false);
   pinMode(BUTTON_PIN, INPUT_PULLUP); 
+
+  pinMode(PIR_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR_PIN), onPirRise, RISING);
 
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonFall, FALLING);
 
@@ -427,9 +445,11 @@ void setup() {
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("AE3000 PRTBL");
+  display.println("AE3000");
+  display.setCursor(0, 16);
+  display.println("PRTBL");
   display.display();
-  delay(800);
+  delay(400);
 
   bool bme_ok = bme.begin(0x76);
   if (!bme_ok) {
@@ -472,6 +492,35 @@ void loop() {
     if (digitalRead(BUTTON_PIN) == LOW) {
       toggleRelay();
       Serial.println("Кнопка (IRQ)");
+    }
+  }
+
+  if (g_pirEvent) {
+    g_pirEvent = false;
+
+    unsigned long now = millis();
+
+    if (now - lastPirTime > PIR_COOLDOWN) {
+      lastPirTime = now;
+      lastMotionTime = now;   
+
+      Serial.println("[PIR] Motion detected");
+
+      if (!relayState) {
+        setRelay(true);
+      }
+
+      if (bot && WiFi.status() == WL_CONNECTED) {
+        bot->sendMessage(chatId5, "Обнаружено движение", "");
+      }
+    }
+  }
+
+  if (relayState && lastMotionTime > 0) {
+    if (millis() - lastMotionTime >= LIGHT_TIMEOUT) {
+      Serial.println("[PIR] No motion for 15 min → relay OFF");
+      setRelay(false);
+      lastMotionTime = 0; 
     }
   }
 
