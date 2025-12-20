@@ -4,7 +4,7 @@
 // 13.12 АЕ3000 Коробочка эдишн. Кнопка, выключатель, экран, реле, питание, BME280(температура, влажность и давление) и все в распределительной коробке с удлинителем на 3 слота 10А ^
 // + Wi-Fi, сайт/апи, тг бот, ntp и OTA 
 //18.12 наконец работает надежнее
-//19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее 
+//19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее, 2 wifi
 
 #include <Arduino.h>
 
@@ -32,6 +32,8 @@
 #define RELAY_PIN D2 
 #define BUTTON_PIN D1 
 
+bool useSchedule = true;
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
 
@@ -49,6 +51,19 @@ ESP8266WebServer server(80);
 volatile bool g_btnEvent = false;
 volatile uint32_t g_btnIrqMs = 0;
 
+bool relayBySchedule() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  timeClient.update();
+  int h = timeClient.getHours();
+
+  bool night = (h >= 17 || h < 3);   // 17:00 – 03:00
+  bool morning = (h >= 7 && h < 10); // 07:00 – 10:00
+
+  return night || morning;
+}
+
+
 void ICACHE_RAM_ATTR onButtonFall() {
   uint32_t now = millis();
   if (now - g_btnIrqMs > 50) {
@@ -60,6 +75,7 @@ void ICACHE_RAM_ATTR onButtonFall() {
 bool relayState = false;             
 unsigned long lastButtonTime = 0;    
 const unsigned long DEBOUNCE = 50;  
+
 
 /*
 bool showSimpleScreen = false;
@@ -459,6 +475,24 @@ void loop() {
     }
   }
 
+  static unsigned long lastScheduleCheck = 0;
+
+  if (useSchedule && millis() - lastScheduleCheck > 30000) {
+    lastScheduleCheck = millis();
+
+    bool shouldBeOn = relayBySchedule();
+
+    if (shouldBeOn != relayState) {
+      setRelay(shouldBeOn);
+
+      Serial.printf("[SCHEDULE] %02d:%02d → relay %s\n",
+        timeClient.getHours(),
+        timeClient.getMinutes(),
+        shouldBeOn ? "ON" : "OFF"
+      );
+    }
+  }
+
   if (WiFi.status() == WL_CONNECTED && millis() - lastBotPoll > BOT_POLL_INTERVAL) {
     lastBotPoll = millis();
     int numNew = bot->getUpdates(bot->last_message_received + 1);
@@ -506,4 +540,5 @@ void loop() {
 
     display.display();
   }
+  
 }
