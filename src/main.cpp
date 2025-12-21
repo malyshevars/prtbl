@@ -6,6 +6,7 @@
 //18.12 наконец работает надежнее
 //19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее, 2 wifi
 //20.12 +расписание +тг переделка и изменены делеи
+//21,12 +датчик движения (расписание кривое)
 
 #include <Arduino.h>
 
@@ -499,15 +500,14 @@ void loop() {
     g_pirEvent = false;
 
     unsigned long now = millis();
-
     if (now - lastPirTime > PIR_COOLDOWN) {
       lastPirTime = now;
-      lastMotionTime = now;   
+      lastMotionTime = now;
 
-      Serial.println("[PIR] Motion detected");
+      Serial.println("PIR-ON");
 
-      if (!relayState) {
-        setRelay(true);
+      if (relayState == true) {   
+        setRelay(false);          
       }
 
       if (bot && WiFi.status() == WL_CONNECTED) {
@@ -516,11 +516,10 @@ void loop() {
     }
   }
 
-  if (relayState && lastMotionTime > 0) {
+  if (relayState == false && lastMotionTime > 0) { 
     if (millis() - lastMotionTime >= LIGHT_TIMEOUT) {
-      Serial.println("[PIR] No motion for 15 min → relay OFF");
-      setRelay(false);
-      lastMotionTime = 0; 
+      setRelay(true);   
+      lastMotionTime = 0;
     }
   }
 
