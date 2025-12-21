@@ -40,13 +40,13 @@ bool useSchedule = false;
 
 volatile bool g_pirEvent = false;
 unsigned long lastPirTime = 0;
-const unsigned long PIR_COOLDOWN = 30000; 
+const unsigned long PIR_COOLDOWN = 59000; 
 
 volatile bool g_btnEvent = false;
 volatile uint32_t g_btnIrqMs = 0;
 
 unsigned long lastMotionTime = 0;
-const unsigned long LIGHT_TIMEOUT = 1UL * 60UL * 1000UL;
+const unsigned long LIGHT_TIMEOUT = 20UL * 60UL * 1000UL;
 
 
 void ICACHE_RAM_ATTR onButtonFall() {
@@ -118,7 +118,7 @@ unsigned long totalCount = 0;
 float lastTemp = NAN, lastHum = NAN, lastPres = NAN;
 
 
-const char KB_MICRO[] = "[[\"Климат\"]]";
+const char KB_MICRO[] = "[[\"Климат\"]," "[\"Включить свет\",\"Выключить свет\"]]";
 
 /*
 String trendTempText = "стабильно"; 
@@ -264,7 +264,7 @@ String htmlWrap(const String& title, const String& body) {
          "  margin:20px auto;"
          "  padding:0 12px;"
          "  text-align:center;"          
-         "  background: url('https://cojo.ru/wp-content/uploads/2022/12/anime-fon-luna-1.webp') no-repeat center center fixed,"
+         "  background: url('https://ir.ozone.ru/s3/multimedia-6/c1000/6014892378.jpg') no-repeat center center fixed,"
          "              url('https://192.168.1.123/static/010.jpg') no-repeat center center fixed;"
          "  background-size: cover;"
          "}"
@@ -273,7 +273,7 @@ String htmlWrap(const String& title, const String& body) {
          "<meta http-equiv='refresh' content='10'>"
          "</head><body>");
   s += body;
-  s += F("<hr><p><a href='/'>Сводка</a> • <a href='/temp'>Температура</a> • <a href='/hum'>Влажность</a> • <a href='/pres'>Давление</a></p>"
+  s += F("<hr><p> • <a href='/'>Сводка</a> • <a href='/relay/on'>Включить свет</a> • <a href='/relay/off'>Выключить свет</a> • </p>"
          "</body></html>");
   return s;
 }
@@ -380,7 +380,29 @@ void handleNewMessages(int numNewMessages) {
 
     Serial.printf("[TG] msg from %s (%s): %s\n", from.c_str(), chat_id.c_str(), text.c_str());
 
-    // реагируем только на определённые сообщения
+    if (text == "Включить свет") {
+
+      if (relayState == true) {        // если сейчас ВЫКЛ
+        setRelay(false);               // ВКЛ
+        lastMotionTime = millis();     // запускаем таймер PIR
+      }
+
+      bot->sendMessage(chat_id, "💡 Свет включен", "");
+      continue;
+    }
+
+
+    if (text == "Выключить свет") {
+
+      if (relayState == false) {       // если сейчас ВКЛ
+        setRelay(true);                // ВЫКЛ
+      }
+
+      lastMotionTime = 0;              // сбрасываем таймер
+      bot->sendMessage(chat_id, "💤 Свет выключен", "");
+      continue;
+    }
+
     if (text == "Климат" || text == "/microclimate" || text == "/start" || text == "/kb") {
       String payload = makeSummaryText();
       bot->sendMessageWithReplyKeyboard(chat_id, makeSummaryText(), "HTML", KB_MICRO, true, false, false);
@@ -492,7 +514,7 @@ void loop() {
     g_btnEvent = false;
     if (digitalRead(BUTTON_PIN) == LOW) {
       toggleRelay();
-      Serial.println("Кнопка (IRQ)");
+      Serial.println("Кнопка");
     }
   }
 
@@ -506,11 +528,14 @@ void loop() {
 
       Serial.println("PIR-ON");
 
+      bool turnedOn = false;
+
       if (relayState == true) {   
-        setRelay(false);          
+        setRelay(false);
+        turnedOn = true;          
       }
 
-      if (bot && WiFi.status() == WL_CONNECTED) {
+      if (turnedOn && bot && WiFi.status() == WL_CONNECTED) {
         bot->sendMessage(chatId5, "Обнаружено движение", "");
       }
     }
@@ -531,7 +556,7 @@ void loop() {
     bool shouldBeOn = relayBySchedule();
 
     if (shouldBeOn != relayState) {
-      setRelay(shouldBeOn);
+      setRelay(!shouldBeOn);
 
       Serial.printf("[SCHEDULE] %02d:%02d → relay %s\n",
         timeClient.getHours(),
