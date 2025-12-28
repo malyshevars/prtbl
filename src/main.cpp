@@ -7,6 +7,9 @@
 //19.12 добавлен выключатель, конденсатор и резистор (схемотехника), вычещен код - закоментил лишнее, 2 wifi
 //20.12 +расписание +тг переделка и изменены делеи
 //21,12 +датчик движения (расписание кривое)
+//22,12 реле можно включить через сайт и тг, время включения увеличено
+//23,12 переподключение вайфая, оставлен 1 вайфай, микро правки (реле может залипать)
+//28.12 новая логика времени
 
 #include <Arduino.h>
 
@@ -38,6 +41,11 @@
 
 bool useSchedule = false;
 
+bool timeValid = false;
+
+unsigned long lastWifiCheck = 0;
+const unsigned long WIFI_RECONNECT_INTERVAL = 15UL * 60UL * 1000UL; 
+
 volatile bool g_pirEvent = false;
 unsigned long lastPirTime = 0;
 const unsigned long PIR_COOLDOWN = 59000; 
@@ -65,7 +73,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_BME280 bme;
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 3 * 3600, 180000);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 3 * 3600, 600000);
 
 
 std::unique_ptr<BearSSL::WiFiClientSecure> tgClient;
@@ -198,9 +206,9 @@ void setupWiFi() {
     return WiFi.status() == WL_CONNECTED;
   };
 
-  if (!tryConnect(ssid, password)) {
-    Serial.println("Primary WiFi failed, try backup...");
-    tryConnect(ssid2, password2);
+  if (!tryConnect(ssid2, password2)) {
+    Serial.println("Try 2");
+    tryConnect(ssid, password);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -265,12 +273,12 @@ String htmlWrap(const String& title, const String& body) {
          "  padding:0 12px;"
          "  text-align:center;"          
          "  background: url('https://ir.ozone.ru/s3/multimedia-6/c1000/6014892378.jpg') no-repeat center center fixed,"
-         "              url('https://192.168.1.123/static/010.jpg') no-repeat center center fixed;"
+         "              url('https://ir.ozone.ru/s3/multimedia-6/c1000/6014892378.jpg') no-repeat center center fixed;"
          "  background-size: cover;"
          "}"
          "h1{font-size:1.6rem} .v{font-size:2.2rem} a{color:#0a74da;text-decoration:none}"
          "</style>"
-         "<meta http-equiv='refresh' content='10'>"
+         "<meta http-equiv='refresh' content='60'>"
          "</head><body>");
   s += body;
   s += F("<hr><p> • <a href='/'>Сводка</a> • <a href='/relay/on'>Включить свет</a> • <a href='/relay/off'>Выключить свет</a> • </p>"
@@ -506,6 +514,17 @@ void setup() {
 
 void loop() {
 
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - lastWifiCheck > WIFI_RECONNECT_INTERVAL) {
+      lastWifiCheck = millis();
+
+      Serial.println("[WiFi] Reconnecting...");
+      WiFi.disconnect();
+      WiFi.begin(ssid2, password2);
+    }
+  }
+
+
   ArduinoOTA.handle();
   server.handleClient();
   yield();
@@ -598,14 +617,28 @@ void loop() {
     display.setTextSize(2);
     display.setCursor(0, 0);
 
+    /*
+
     if (WiFi.status() == WL_CONNECTED) {
       timeClient.update();
-      display.printf("%02d:%02d\n",
-                     timeClient.getHours(),
-                     timeClient.getMinutes());
+      display.printf("%02d:%02d\n", timeClient.getHours(), timeClient.getMinutes());
+    } else {
+      display.printf("%02d:%02d\n", timeClient.getHours(), timeClient.getMinutes());
+    }
+*/
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      if (timeClient.update()) {
+        timeValid = true;
+      }
+    }
+
+    if (timeValid) {
+      display.printf("%02d:%02d\n", timeClient.getHours(), timeClient.getMinutes());
     } else {
       display.println("--:--");
     }
+
 
     display.printf("T: %.1f C\n", lastTemp);
     display.printf("H: %.1f %%\n", lastHum);
